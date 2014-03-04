@@ -6,13 +6,12 @@ __RCSID__ = "$Id$"
 from DIRAC                                              import S_OK, S_ERROR, gConfig
 from DIRAC.Core.Base.AgentModule                        import AgentModule
 from DIRAC.Core.Utilities                               import List
-from DIRAC.Core.Utilities.Grid                          import ldapSite, ldapCluster, ldapCE, ldapCEState
+from DIRAC.Core.Utilities.Grid                          import ldapSite, ldapCluster, ldapCE, ldapCEState, ldapService
 from DIRAC.FrameworkSystem.Client.NotificationClient    import NotificationClient
 from DIRAC.ConfigurationSystem.Client.CSAPI             import CSAPI
 from DIRAC.Core.Security.ProxyInfo                      import getProxyInfo, formatProxyInfoAsString
 from DIRAC.ConfigurationSystem.Client.Helpers.Path      import cfgPath
 from DIRAC.ConfigurationSystem.Client.Helpers.CSGlobals import getVO
-from DIRAC.ConfigurationSystem.Client.Helpers.Resources import Resources
 
 class CE2CSAgent( AgentModule ):
 
@@ -42,11 +41,13 @@ class CE2CSAgent( AgentModule ):
     self.subject = "CE2CSAgent"
 
     # This sets the Default Proxy to used as that defined under
-    # /Operations/Shifter/TestManager
+    # /Operations/Shifter/SAMManager
     # the shifterProxy option in the Configuration can be used to change this default.
-    self.am_setOption( 'shifterProxy', 'TestManager' )
+    self.am_setOption( 'shifterProxy', 'SAMManager' )
 
-    self.voName = self.am_getOption( 'VirtualOrganization', self.voName )
+    self.voName = self.am_getOption( 'VirtualOrganization', [] )
+    
+    self.log.info( "VO %s" % self.voName )
     if not self.voName:
       self.voName = getVO()
 
@@ -96,126 +97,125 @@ class CE2CSAgent( AgentModule ):
 
     knownces = self.am_getOption( 'BannedCEs', [] )
 
-    resources = Resources( self.voName )
-    result    = resources.getEligibleResources( 'Computing', {'CEType':['LCG','CREAM'] } ) 
+    result = gConfig.getSections( '/Resources/Sites' )
     if not result['OK']:
-      return result
-    
-    knownces = [ resources.getComputingElementValue( x, 'Host' ) for x in result['Value'] ]
+      return
+    grids = result['Value']
 
-#    result = gConfig.getSections( '/Resources/Sites' )
-#    if not result['OK']:
-#      return
-#    grids = result['Value']
-#
-#    for grid in grids:
-#
-#      result = gConfig.getSections( '/Resources/Sites/%s' % grid )
-#      if not result['OK']:
-#        return
-#      sites = result['Value']
-#
-#      for site in sites:
-#        opt = gConfig.getOptionsDict( '/Resources/Sites/%s/%s' % ( grid, site ) )['Value']
-#        ces = List.fromChar( opt.get( 'CE', '' ) )
-#        knownces += ces
+    for grid in grids:
 
-    response = ldapCEState( '', vo = self.voName )
-    if not response['OK']:
-      self.log.error( "Error during BDII request", response['Message'] )
-      response = self.__checkAlternativeBDIISite( ldapCEState, '', self.voName )
-      return response
 
+      result = gConfig.getSections( '/Resources/Sites/%s' % grid )
+      if not result['OK']:
+        return
+      sites = result['Value']
+
+      
+    for site in sites:
+        opt = gConfig.getOptionsDict( '/Resources/Sites/%s/%s' % ( grid, site ) )['Value']
+        ces = List.fromChar( opt.get( 'CE', '' ) )
+        knownces += ces
+
+    response = ''
     newces = {}
-    for queue in response['Value']:
-      try:
-        queuename = queue['GlueCEUniqueID']
-      except:
-        continue
-
-      cename = queuename.split( ":" )[0]
-      if not cename in knownces:
-        newces[cename] = None
-        self.log.debug( "newce", cename )
-
-    body = ""
-    possibleNewSites = []
-    for ce in newces.iterkeys():
-      response = ldapCluster( ce )
+    for vo in self.voName:
+      self.log.info( "Check for available CEs for VO", vo )
+      response = ldapCEState( '', vo )
       if not response['OK']:
-        self.log.warn( "Error during BDII request", response['Message'] )
-        response = self.__checkAlternativeBDIISite( ldapCluster, ce )
-        continue
-      clusters = response['Value']
-      if len( clusters ) != 1:
-        self.log.warn( "Error in cluster length", " CE %s Length %d" % ( ce, len( clusters ) ) )
-      if len( clusters ) == 0:
-        continue
-      cluster = clusters[0]
-      fkey = cluster.get( 'GlueForeignKey', [] )
-      if type( fkey ) == type( '' ):
-        fkey = [fkey]
-      nameBDII = None
-      for entry in fkey:
-        if entry.count( 'GlueSiteUniqueID' ):
-          nameBDII = entry.split( '=' )[1]
-          break
-      if not nameBDII:
-        continue
+        self.log.error( "Error during BDII request", response['Message'] )
+        response = self.__checkAlternativeBDIISite( ldapCEState, '', vo )
+        return response
 
-      cestring = "CE: %s, GOCDB Name: %s" % ( ce, nameBDII )
-      self.log.info( cestring )
+      newces = {}
+      for queue in response['Value']:
+        try:
+          queuename = queue['GlueCEUniqueID']
+        except:
+          continue
 
-      response = ldapCE( ce )
-      if not response['OK']:
-        self.log.warn( "Error during BDII request", response['Message'] )
-        response = self.__checkAlternativeBDIISite( ldapCE, ce )
-        continue
+        cename = queuename.split( ":" )[0]
+        if not cename in knownces:
+          newces[cename] = None
+          self.log.debug( "newce", cename )
 
-      ceinfos = response['Value']
-      if len( ceinfos ):
-        ceinfo = ceinfos[0]
-        systemName = ceinfo.get( 'GlueHostOperatingSystemName', 'Unknown' )
-        systemVersion = ceinfo.get( 'GlueHostOperatingSystemVersion', 'Unknown' )
-        systemRelease = ceinfo.get( 'GlueHostOperatingSystemRelease', 'Unknown' )
-      else:
-        systemName = "Unknown"
-        systemVersion = "Unknown"
-        systemRelease = "Unknown"
+      body = ""
+      possibleNewSites = []
+      for ce in newces.iterkeys():
+        response = ldapCluster( ce )
+        if not response['OK']:
+          self.log.warn( "Error during BDII request", response['Message'] )
+          response = self.__checkAlternativeBDIISite( ldapCluster, ce )
+          continue
+        clusters = response['Value']
+        if len( clusters ) != 1:
+          self.log.warn( "Error in cluster length", " CE %s Length %d" % ( ce, len( clusters ) ) )
+        if len( clusters ) == 0:
+          continue
+        cluster = clusters[0]
+        fkey = cluster.get( 'GlueForeignKey', [] )
+        if type( fkey ) == type( '' ):
+          fkey = [fkey]
+        nameBDII = None
+        for entry in fkey:
+          if entry.count( 'GlueSiteUniqueID' ):
+            nameBDII = entry.split( '=' )[1]
+            break
+        if not nameBDII:
+          continue
 
-      osstring = "SystemName: %s, SystemVersion: %s, SystemRelease: %s" % ( systemName, systemVersion, systemRelease )
-      self.log.info( osstring )
+        cestring = "CE: %s, GOCDB Name: %s" % ( ce, nameBDII )
+        self.log.info( cestring )
 
-      response = ldapCEState( ce, vo = self.voName )
-      if not response['OK']:
-        self.log.warn( "Error during BDII request", response['Message'] )
-        response = self.__checkAlternativeBDIISite( ldapCEState, ce, self.voName )
-        continue
+        response = ldapCE( ce )
+        if not response['OK']:
+          self.log.warn( "Error during BDII request", response['Message'] )
+          response = self.__checkAlternativeBDIISite( ldapCE, ce )
+          continue
 
-      newcestring = "\n\n%s\n%s" % ( cestring, osstring )
-      usefull = False
-      cestates = response['Value']
-      for cestate in cestates:
-        queuename = cestate.get( 'GlueCEUniqueID', 'UnknownName' )
-        queuestatus = cestate.get( 'GlueCEStateStatus', 'UnknownStatus' )
+        ceinfos = response['Value']
+        if len( ceinfos ):
+          ceinfo = ceinfos[0]
+          systemName = ceinfo.get( 'GlueHostOperatingSystemName', 'Unknown' )
+          systemVersion = ceinfo.get( 'GlueHostOperatingSystemVersion', 'Unknown' )
+          systemRelease = ceinfo.get( 'GlueHostOperatingSystemRelease', 'Unknown' )
+        else:
+          systemName = "Unknown"
+          systemVersion = "Unknown"
+          systemRelease = "Unknown"
 
-        queuestring = "%s %s" % ( queuename, queuestatus )
-        self.log.info( queuestring )
-        newcestring += "\n%s" % queuestring
-        if queuestatus.count( 'Production' ):
-          usefull = True
-      if usefull:
-        body += newcestring
-        possibleNewSites.append( 'dirac-admin-add-site DIRACSiteName %s %s' % ( nameBDII, ce ) )
-    if body:
-      body = "We are glad to inform You about new CE(s) possibly suitable for %s:\n" % self.voName + body
-      body += "\n\nTo suppress information about CE add its name to BannedCEs list."
-      for  possibleNewSite in  possibleNewSites:
-        body = "%s\n%s" % ( body, possibleNewSite )
-      self.log.info( body )
-      if self.addressTo and self.addressFrom:
-        notification = NotificationClient()
-        result = notification.sendMail( self.addressTo, self.subject, body, self.addressFrom, localAttempt = False )
+        osstring = "SystemName: %s, SystemVersion: %s, SystemRelease: %s" % ( systemName, systemVersion, systemRelease )
+        self.log.info( osstring )
+
+        response = ldapCEState( ce, vo )
+        if not response['OK']:
+          self.log.warn( "Error during BDII request", response['Message'] )
+          response = self.__checkAlternativeBDIISite( ldapCEState, ce, self.voName )
+          continue
+
+        newcestring = "\n\n%s\n%s" % ( cestring, osstring )
+        usefull = False
+        cestates = response['Value']
+        for cestate in cestates:
+          queuename = cestate.get( 'GlueCEUniqueID', 'UnknownName' )
+          queuestatus = cestate.get( 'GlueCEStateStatus', 'UnknownStatus' )
+
+          queuestring = "%s %s" % ( queuename, queuestatus )
+          self.log.info( queuestring )
+          newcestring += "\n%s" % queuestring
+          if queuestatus.count( 'Production' ):
+            usefull = True
+        if usefull:
+          body += newcestring
+          possibleNewSites.append( 'dirac-admin-add-site DIRACSiteName %s %s' % ( nameBDII, ce ) )
+      if body:
+        body = "We are glad to inform You about new CE(s) possibly suitable for %s:\n" % vo + body
+        body += "\n\nTo suppress information about CE add its name to BannedCEs list."
+        for  possibleNewSite in  possibleNewSites:
+          body = "%s\n%s" % ( body, possibleNewSite )
+        self.log.info( body )
+        if self.addressTo and self.addressFrom:
+          notification = NotificationClient()
+          result = notification.sendMail( self.addressTo, self.subject, body, self.addressFrom, localAttempt = False )
 
     return S_OK()
 
