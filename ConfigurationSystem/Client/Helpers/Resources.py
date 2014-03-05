@@ -113,7 +113,7 @@ from DIRAC.Core.Utilities.List                          import uniqueElements
 #
 #  Global constants
 
-gBaseResourcesSection = "/Resources_new"
+gBaseResourcesSection = "/Resources"
 RESOURCE_NODE_MAPPING = {
   'Computing':'Queue',
   'Storage':'AccessProtocol',

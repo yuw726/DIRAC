@@ -97,27 +97,16 @@ class CE2CSAgent( AgentModule ):
 
     knownces = self.am_getOption( 'BannedCEs', [] )
 
-    result = gConfig.getSections( '/Resources/Sites' )
-    if not result['OK']:
-      return
-    grids = result['Value']
-
-    for grid in grids:
-
-
-      result = gConfig.getSections( '/Resources/Sites/%s' % grid )
+    for vo in self.voName:
+      resources = Resources( vo )
+      result    = resources.getEligibleResources( 'Computing', {'CEType':['LCG','CREAM'] } )
       if not result['OK']:
-        return
-      sites = result['Value']
+      #  self.log.error( result['Message'] )
+        return result
 
-      
-    for site in sites:
-        opt = gConfig.getOptionsDict( '/Resources/Sites/%s/%s' % ( grid, site ) )['Value']
-        ces = List.fromChar( opt.get( 'CE', '' ) )
-        knownces += ces
+      knownces += [ resources.getComputingElementValue( x, 'Host' ) for x in result['Value'] ]
 
     response = ''
-    newces = {}
     for vo in self.voName:
       self.log.info( "Check for available CEs for VO", vo )
       response = ldapCEState( '', vo )
