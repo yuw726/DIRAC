@@ -12,6 +12,7 @@ from DIRAC.ConfigurationSystem.Client.CSAPI             import CSAPI
 from DIRAC.Core.Security.ProxyInfo                      import getProxyInfo, formatProxyInfoAsString
 from DIRAC.ConfigurationSystem.Client.Helpers.Path      import cfgPath
 from DIRAC.ConfigurationSystem.Client.Helpers.CSGlobals import getVO
+from DIRAC.ConfigurationSystem.Client.Helpers.Resources import Resources
 
 class CE2CSAgent( AgentModule ):
 
