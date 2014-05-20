@@ -16,8 +16,6 @@ from DIRAC                                               import S_OK, S_ERROR
 from DIRAC.Resources.Computing.SSHComputingElement       import SSH 
 from DIRAC.Core.Utilities.List                           import breakListIntoChunks
 
-import re
-
 CE_NAME = 'SSHTorque'
 MANDATORY_PARAMETERS = [ 'Queue' ]
 
@@ -34,16 +32,11 @@ class SSHTorqueComputingElement( SSHComputingElement ):
     self.mandatoryParameters = MANDATORY_PARAMETERS
 
   #############################################################################
-  def getCEStatus( self ):
-    """ Method to return information on running and pending jobs.
-    """
+  def __execRemoteSSH(self, ssh, cmd) :
+    """ execute command via ssh connection and return stdout in case of success
+    otherwise stderr"""
 
-    result = S_OK()
-    result['SubmittedJobs'] = self.submittedJobs
-
-    ssh = SSH( parameters = self.ceParameters )
-    cmd = ["qstat", "-Q" , self.execQueue ]
-    ret = ssh.sshCall( 10, cmd )
+    ret = ssh.sshCall(10, cmd)
 
     if not ret['OK']:
       self.log.error( 'Timeout', ret['Message'] )
@@ -58,19 +51,33 @@ class SSHTorqueComputingElement( SSHComputingElement ):
     self.log.debug( "stderr:", stderr )
 
     if status:
-      self.log.error( 'Failed qstat execution:', stderr )
+      self.log.error( 'Failed remote execution of command "%s": %s:' % (' '.join(cmd), stderr) )
       return S_ERROR( stderr )
 
-    matched = re.search( self.queue + "\D+(\d+)\D+(\d+)\W+(\w+)\W+(\w+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\W+(\w+)", stdout )
+    return S_OK(stdout)
 
-    if matched.groups < 6:
-      return S_ERROR( "Error retrieving information from qstat:" + stdout + stderr )
 
-    try:
-      waitingJobs = int( matched.group( 5 ) )
-      runningJobs = int( matched.group( 6 ) )
-    except:
-      return S_ERROR( "Error retrieving information from qstat:" + stdout + stderr )
+  #############################################################################
+  def getCEStatus( self ):
+    """ Method to return information on running and pending jobs.
+    """
+
+    result = S_OK()
+    result['SubmittedJobs'] = self.submittedJobs
+
+    ssh = SSH( parameters = self.ceParameters )
+
+    user = self.ceParameters['SSHUser']
+    cmd = ["qselect", "-u", user, "-s", "QW", "-q", self.execQueue, "|", "wc", "-l"]
+    cmd += [';'] + ["qselect", "-u", user, "-s", "R", "-q", self.execQueue, "|", "wc", "-l"]
+    ret = self.__execRemoteSSH( ssh, cmd )
+    if not ret['OK'] :
+      self.log.error( ret['Message'] )
+      return ret
+    resultList = ret['Value'].split() 
+    
+    waitingJobs = int(resultList[0])
+    runningJobs = int(resultList[1])
 
     result['WaitingJobs'] = waitingJobs
     result['RunningJobs'] = runningJobs
